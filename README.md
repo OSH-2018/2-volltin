@@ -1,4 +1,22 @@
 # 编写 Shell 程序
+- [编写 Shell 程序](#%E7%BC%96%E5%86%99-shell-%E7%A8%8B%E5%BA%8F)
+    - [预备知识](#%E9%A2%84%E5%A4%87%E7%9F%A5%E8%AF%86)
+        - [文件描述符](#%E6%96%87%E4%BB%B6%E6%8F%8F%E8%BF%B0%E7%AC%A6)
+            - [简介](#%E7%AE%80%E4%BB%8B)
+            - [特殊文件描述符](#%E7%89%B9%E6%AE%8A%E6%96%87%E4%BB%B6%E6%8F%8F%E8%BF%B0%E7%AC%A6)
+        - [一些系统调用](#%E4%B8%80%E4%BA%9B%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8)
+            - [fork()](#fork)
+            - [exec(file)](#execfile)
+            - [open(file, flag)](#openfile-flag)
+            - [close(fd)](#closefd)
+            - [dup(fd)](#dupfd)
+            - [pipe(int fds[2])](#pipeint-fds2)
+            - [read(fd, buff, len)](#readfd-buff-len)
+            - [write(fd, buff, len)](#writefd-buff-len)
+            - [wait(status)](#waitstatus)
+            - [waitpid(pid, status, options)](#waitpidpid-status-options)
+        - [子进程的退出](#%E5%AD%90%E8%BF%9B%E7%A8%8B%E7%9A%84%E9%80%80%E5%87%BA)
+    - [参考资料](#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99)
 
 ## 预备知识
 
