@@ -16,6 +16,7 @@
             - [wait(status)](#waitstatus)
             - [waitpid(pid, status, options)](#waitpidpid-status-options)
         - [子进程的退出](#%E5%AD%90%E8%BF%9B%E7%A8%8B%E7%9A%84%E9%80%80%E5%87%BA)
+    - [功能实现](#%E5%8A%9F%E8%83%BD%E5%AE%9E%E7%8E%B0)
     - [参考资料](#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99)
 
 ## 预备知识
@@ -190,6 +191,18 @@ if (WIFEXITED(status)){
     printf("status: %d\n", exit_status);
 }
 ```
+
+## 功能实现
+
+V Shell 实现了以下功能：
+
+- 管道
+- 内建命令
+    - cd
+    - pwd
+    - exit
+    - export
+- 根据运行命令返回值改变提示符的颜色
 
 ## 参考资料
 
