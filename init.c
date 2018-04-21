@@ -8,10 +8,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <stdbool.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+
+/*
+ * Constants
+ */
+#define VSH_ARGS_BUFF_SIZE (1024 * sizeof(char*))
+#define VSH_ARG_BUFF_SIZE (1024 * sizeof(char))
+#define VSH_BLANK_CHARS " \t\n\a\r"
+
+/*
+ * Prepare rules
+ */
+#define VSH_PREPARE_RULE_NUM 3
+const char *VSH_PREPARE_RULE[VSH_PREPARE_RULE_NUM][2] = {
+        {"|", " | "},
+        {"<", " < "},
+        {">", " > "}
+};
+
+/*
+ * Redirect symbols
+ */
+#define VSH_REDIRECT_SYMBOL_NUM 2
+const char *VSH_REDIRECT_SYMBOL[VSH_REDIRECT_SYMBOL_NUM] = {
+        ">",
+        "<"
+};
 
 /*
  * Built-in commands
@@ -24,13 +51,6 @@ const char *VSH_BUILTINS[] = {
         "export",
         "alias"
 };
-
-/*
- * Constants
- */
-#define VSH_ARGS_BUFF_SIZE (1024 * sizeof(char*))
-#define VSH_ARG_BUFF_SIZE (1024 * sizeof(char))
-#define VSH_BLANK_CHARS " \t\n\a\r"
 
 /*
  * Global variables
@@ -51,20 +71,20 @@ void vsh_error_exit(const char *cause);
 /* Commands process */
 char *vsh_get_line();
 
-char **vsh_split_line(char *line);
+char *vsh_prepare_line(const char *_line);
+
+char **vsh_split_line(const char *line);
 
 char ***vsh_parse_args(char **args);
 
 bool vsh_is_builtin(char **args);
 
-char *vsh_str_replace(const char *str, char *oldstr, char *newstr);
+char *vsh_str_replace(const char *str, const char *oldstr, const char *newstr);
 
 /* Execute */
 int vsh_pipeline(char ***argss, int cur, int in_fd);
 
 int vsh_execute(char **args);
-
-int vsh_execute_in_pipe(char **args);
 
 int vsh_exec_builtin(char **args);
 
@@ -151,7 +171,7 @@ char *vsh_get_line() {
 /*
  * replace `oldstr` with `newstr` in `str`
  */
-char *vsh_str_replace(const char *str, char *oldstr, char *newstr) {
+char *vsh_str_replace(const char *str, const char *oldstr, const char *newstr) {
     char *buffer = (char *) malloc(VSH_ARG_BUFF_SIZE);
     char *p;
     
@@ -168,19 +188,33 @@ char *vsh_str_replace(const char *str, char *oldstr, char *newstr) {
     return buffer;
 }
 
+char *vsh_prepare_line(const char *_line) {
+    char *line, *tmp;
+    
+    line = strdup(_line);
+    
+    for (size_t idx = 0; idx < VSH_PREPARE_RULE_NUM; idx++) {
+        tmp = vsh_str_replace(line, VSH_PREPARE_RULE[idx][0], VSH_PREPARE_RULE[idx][1]);
+        vsh_free(line);
+        line = tmp;
+    }
+    
+    return line;
+}
+
 /*
  * do some preparing work:
  *  replace "|" with " | " for convenience
  * split the line to tokens by white chars
  * then return a string array pointer
  */
-char **vsh_split_line(char *line) {
-    line = vsh_str_replace(line, "|", " | ");
+char **vsh_split_line(const char *line) {
+    char *new_line = vsh_prepare_line(line);
     
     char **args = (char **) malloc(VSH_ARGS_BUFF_SIZE);
     size_t arg_num = 0;
     
-    char *token = strtok(line, VSH_BLANK_CHARS);;
+    char *token = strtok(new_line, VSH_BLANK_CHARS);;
     while (token != NULL) {
         args[arg_num] = (char *) malloc(VSH_ARG_BUFF_SIZE);
         strncpy(args[arg_num], token, VSH_ARG_BUFF_SIZE);
@@ -189,7 +223,7 @@ char **vsh_split_line(char *line) {
         token = strtok(NULL, VSH_BLANK_CHARS);
     }
     
-    vsh_free(line);
+    vsh_free(new_line);
     
     args[arg_num] = NULL;
     return args;
@@ -252,7 +286,7 @@ int vsh_pipeline(char ***argss, int cur, int in_fd) {
                 vsh_error_exit("pipeline dup2");
             }
         }
-        vsh_execute_in_pipe(args);
+        vsh_execute(args);
         vsh_error_exit("pipeline execvp");
         return 0;
     } else {
@@ -278,7 +312,7 @@ int vsh_pipeline(char ***argss, int cur, int in_fd) {
             else if (-1 == close(p[1]))
                 perror("close dup fd failed");
             else {
-                vsh_execute_in_pipe(args);
+                vsh_execute(args);
             }
         }
         
@@ -293,35 +327,93 @@ int vsh_pipeline(char ***argss, int cur, int in_fd) {
 }
 
 /*
- * fork and execute a command with args
+ * shift array from pos to the first NULL.
+ * and write NULL to the end pos.
+ * a b c NULL
+ *   ^ pos
+ *
  */
-int vsh_execute(char **args) {
-    if (!args || !args[0]) return 0;
-    if (vsh_is_builtin(args)) {
-        return vsh_exec_builtin(args);
-    } else {
-        pid_t pid = fork();
-        if (pid == 0) {
-            execvp(args[0], args);
-            perror(args[0]);
-            _exit(-1);
-        }
-        int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status)) {
-            return WEXITSTATUS(status);
-        } else {
-            return -1;
+void vsh_shift_util_null(char **args, size_t pos) {
+    if (args[pos] == NULL) return;
+    size_t idx;
+    for (idx = pos; args[idx + 1]; idx++) {
+        args[idx] = args[idx + 1];
+    }
+    args[idx] = NULL;
+}
+
+/*
+ * find the redirect symbol in args.
+ * if any one found, return the pos.
+ * otherwise, return -1.
+ */
+int vsh_has_redirect(char **args) {
+    for (size_t idx = 0; args[idx]; idx += 1) {
+        for (size_t k = 0; k < VSH_REDIRECT_SYMBOL_NUM; k++) {
+            if (strcmp(VSH_REDIRECT_SYMBOL[k], args[idx]) == 0) {
+                return (int) idx;
+            }
         }
     }
-    return 0;
+    return -1;
 }
 
 /*
  * DO NOT fork (cuz it's done by pipeline) and execute a command with args
  */
-int vsh_execute_in_pipe(char **args) {
+int vsh_execute(char **args) {
     if (!args || !args[0]) return 0;
+    
+    // check redirect
+    int red_pos = vsh_has_redirect(args);
+    if (red_pos != -1) {
+        int red_fd;
+        bool append = false;
+        if (strcmp(args[red_pos], args[red_pos + 1]) == 0) {
+            if (strcmp(args[red_pos], ">") == 0) {
+                append = true;
+                red_fd = STDOUT_FILENO;
+            } else {
+                // here doc
+                perror("not impl");
+                _exit(-1);
+            }
+        } else {
+            if (strcmp(args[red_pos], ">") == 0) {
+                // redirect stdout
+                red_fd = STDOUT_FILENO;
+            } else {
+                // redirect stdin
+                red_fd = STDIN_FILENO;
+            }
+        }
+        
+        int old_f = dup(red_fd);
+        close(red_fd);
+        int fd;
+        if (red_fd == STDOUT_FILENO) {
+            fd = open(args[append ? red_pos + 2 : red_pos + 1],
+                          O_CREAT | O_WRONLY | (append ? O_APPEND : O_TRUNC),
+                          S_IRUSR | S_IWUSR | S_IRGRP);
+        } else {
+            fd = open(args[red_pos + 1], O_RDONLY);
+        }
+        if (fd == -1) {
+            perror("open file");
+        }
+        dup2(fd, red_fd);
+        
+        vsh_shift_util_null(args, red_pos);
+        vsh_shift_util_null(args, red_pos);
+        if (append) vsh_shift_util_null(args, red_pos);
+        
+        int ret = vsh_execute(args);
+        
+        close(fd);
+        dup2(old_f, red_fd);
+        return ret;
+    }
+    
     if (vsh_is_builtin(args)) {
         return vsh_exec_builtin(args);
     } else {
@@ -329,7 +421,6 @@ int vsh_execute_in_pipe(char **args) {
         perror(args[0]);
         _exit(-1);
     }
-    return 0;
 }
 
 /*
@@ -364,10 +455,14 @@ int vsh_exec_builtin(char **args) {
  * given an args, do the things that should be done.
  */
 int vsh_run(char **args) {
-    char ***argss = vsh_parse_args(args);
+    if (args[0] == NULL)
+        return 0;
+    
     int ret;
-    if (argss[1] == NULL) {
-        // only one cmd
+    
+    char ***argss = vsh_parse_args(args);
+    if (argss[1] == NULL && vsh_is_builtin(argss[0])) {
+        // builtin (may change state of the shell)
         ret = vsh_execute(argss[0]);
     } else {
         // pipeline start !!
